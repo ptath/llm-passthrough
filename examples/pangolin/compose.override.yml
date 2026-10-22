@@ -1,0 +1,12 @@
+# Copy this file next to compose.yml as compose.override.yml.
+# It attaches the proxy container to the docker network of your Pangolin
+# connector (fosrl/pangolin-cli / newt) running on the same host,
+# so the Pangolin resource can reach it by container name.
+services:
+  openrouter-proxy:
+    networks: [pangolin]
+
+networks:
+  pangolin:
+    name: pangolin-cli_default   # ← CHANGE: your connector's network name
+    external: true

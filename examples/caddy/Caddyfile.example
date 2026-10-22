@@ -1,0 +1,18 @@
+# Passthrough via Caddy alone — no extra container needed.
+# Caddy terminates TLS, strips the secret prefix and rewrites Host/SNI upstream.
+# Replace CHANGE_ME and the domain.
+#
+# Caddy flushes streaming (SSE) responses automatically and has no read timeout
+# by default, so long LLM answers work out of the box.
+
+openrouter.example.com {
+	# Everything outside the secret prefix → 404
+	@blocked not path /CHANGE_ME/*
+	respond @blocked 404
+
+	handle_path /CHANGE_ME/* {
+		reverse_proxy https://openrouter.ai {
+			header_up Host openrouter.ai
+		}
+	}
+}

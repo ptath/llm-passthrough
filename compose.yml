@@ -1,0 +1,21 @@
+services:
+  openrouter-proxy:
+    image: nginx:alpine
+    container_name: openrouter-proxy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80" # loopback only — for local checks. Real traffic goes through your reverse proxy / docker network.
+    environment:
+      # Required. install.sh generates a random value into .env on first run.
+      SECRET_PREFIX: ${SECRET_PREFIX:?SECRET_PREFIX is not set — run ./install.sh or create .env}
+      # Optional: forward to any other API. Defaults = OpenRouter.
+      UPSTREAM_URL: ${UPSTREAM_URL:-https://openrouter.ai}
+      UPSTREAM_HOST: ${UPSTREAM_HOST:-openrouter.ai}
+      # Substitute only these variables into templates (nginx $vars stay intact)
+      NGINX_ENVSUBST_FILTER: ^(SECRET_PREFIX|UPSTREAM_URL|UPSTREAM_HOST)$
+    volumes:
+      - ./templates:/etc/nginx/templates:ro
+
+# No networks here by default: the stack is standalone.
+# If your reverse proxy runs in Docker on the same host (Pangolin, NPM, Traefik),
+# attach via compose.override.yml — see examples/.

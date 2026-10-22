@@ -1,0 +1,42 @@
+# Standalone Traefik with the file provider.
+#
+# Pangolin users: do NOT use this — deploy the container and point a Pangolin
+# resource at it (see examples/pangolin). Pangolin manages its own Traefik.
+#
+# Replace CHANGE_ME and the domain. Requests outside the secret prefix don't
+# match the router rule and get Traefik's default 404.
+
+http:
+  routers:
+    openrouter-passthrough:
+      rule: "Host(`openrouter.example.com`) && PathPrefix(`/CHANGE_ME`)"
+      service: openrouter-upstream
+      middlewares:
+        - openrouter-strip-prefix
+        - openrouter-upstream-host
+      tls: {} # add certResolver per your setup
+
+  middlewares:
+    openrouter-strip-prefix:
+      stripPrefix:
+        prefixes:
+          - "/CHANGE_ME"
+    openrouter-upstream-host:
+      headers:
+        customRequestHeaders:
+          Host: "openrouter.ai"
+
+  services:
+    openrouter-upstream:
+      loadBalancer:
+        servers:
+          - url: "https://openrouter.ai"
+        serversTransports:
+          - openrouter-transport
+
+  serversTransports:
+    openrouter-transport:
+      serverName: openrouter.ai # SNI
+      forwardingTimeouts:
+        readIdleTimeout: 600s
+        responseHeaderTimeout: 600s
