@@ -28,6 +28,16 @@ cd openrouter-passthrough
 
 `install.sh` creates `.env` with a random 32-char `SECRET_PREFIX` on first run and starts the container (listening on `127.0.0.1:8080`). Custom prefix: `SECRET_PREFIX=my-long-prefix ./install.sh`, or edit `.env` later and run `docker compose up -d`.
 
+### Where to find your SECRET_PREFIX
+
+It is printed at the end of `install.sh` and stored in `.env`:
+
+```bash
+grep SECRET_PREFIX .env
+```
+
+Apps use a Base URL like `https://your.domain/<SECRET_PREFIX>` (they append `/api/v1` themselves). If `.env` is lost but the container still runs, recover it: `docker exec openrouter-proxy env | grep SECRET_PREFIX`.
+
 ## Hooking it into your reverse proxy
 
 | Your setup | What to do |
@@ -37,6 +47,8 @@ cd openrouter-passthrough
 | [Nginx Proxy Manager](examples/nginx-proxy-manager/README.md) | proxy host, two options |
 | [Traefik](examples/traefik/dynamic.yml) | dynamic config |
 | Plain nginx | full server block in [README.md](README.md) (Russian) |
+
+You can also hand the repo link to an AI coding agent — [AGENTS.md](AGENTS.md) (plus a `CLAUDE.md` stub) tells it what to check first (a VPS/VDS with direct access to the target service) and how to deploy.
 
 ## Variables
 

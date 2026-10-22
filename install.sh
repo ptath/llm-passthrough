@@ -51,6 +51,10 @@ docker compose up -d
 PREFIX_NOW="$(grep -E '^SECRET_PREFIX=' .env | head -n1 | cut -d= -f2-)"
 echo
 echo "==> Container is up."
+echo "    Your SECRET_PREFIX: ${PREFIX_NOW}"
+echo "    Base URL for apps:  https://your.domain/${PREFIX_NOW}"
+echo "    Find it again later:  grep SECRET_PREFIX .env"
+echo
 echo "    Local test:  curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/${PREFIX_NOW}/api/v1/models"
 echo "    (any HTTP code from the upstream edge means the chain works;"
 echo "     from a blocked region expect 403 here — that is still success for the proxy itself)"
