@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# llm-passthrough — interactive installer (v0.4.1, multi-provider)
+# llm-passthrough — interactive installer (v0.4.2, multi-provider)
 #
 # One-liner:
 #   curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash
@@ -366,6 +366,20 @@ NETWORK_NAME=""
 PROXY_TYPE=""
 BIND_IP_OUT=""; BIND_PORT_OUT=""
 NO_PROXY=0
+TEMPLATE_MD5_STORED=""   # template md5 as recorded by the previous run
+RECREATE=0               # 1 → up --force-recreate (template changed in keep mode)
+
+# portable md5 of a file (Linux md5sum / macOS md5 / openssl fallback)
+tpl_md5() {
+  local f="$1"
+  if command -v md5sum >/dev/null 2>&1; then
+    md5sum "$f" 2>/dev/null | awk '{print $1}'
+  elif command -v md5 >/dev/null 2>&1; then
+    md5 -q "$f" 2>/dev/null
+  else
+    openssl dgst -md5 -r "$f" 2>/dev/null | awk '{print $1}'
+  fi
+}
 
 # first instance always lives in the base compose service (its key is fixed)
 add_instance() {
@@ -382,9 +396,11 @@ add_instance() {
 save_instances() {
   local i
   mkdir -p "$INSTALL_DIR"
+  local tpl_md5_now
+  tpl_md5_now="$(tpl_md5 "$INSTALL_DIR/templates/default.conf.template")"
   {
-    echo "# proxy_type | network (empty = none)"
-    echo "${PROXY_TYPE:-}|${NETWORK_NAME:-}"
+    echo "# proxy_type | network | template_md5 (empty = pre-v0.4.2)"
+    echo "${PROXY_TYPE:-}|${NETWORK_NAME:-}|${tpl_md5_now:-}"
     echo "# service | upstream_url | upstream_host | prefix | domain"
     for ((i=0; i<${#SVCS[@]}; i++)); do
       printf '%s|%s|%s|%s|%s\n' "${SVCS[$i]}" "${URLS[$i]}" "${HOSTS[$i]}" "${PREFIXES[$i]}" "${DOMAINS[$i]}"
@@ -393,16 +409,23 @@ save_instances() {
   chmod 600 "$INSTALL_DIR/instances.conf"
 }
 
+# Reads instances.conf. Line shapes are told apart by the number of '|':
+#   1 pipe → old header (proxy_type|network), 2 pipes → header with md5,
+#   4 pipes → instance line. Anything else is skipped.
 load_instances() {
   SVCS=(); URLS=(); HOSTS=(); PREFIXES=(); DOMAINS=()
-  local line first=1 f1 f2 f3 f4 f5
+  TEMPLATE_MD5_STORED=""
+  local line f1 f2 f3 f4 f5 np
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == \#* ]] && continue
+    np="${line//[^|]/}"; np="${#np}"
     IFS='|' read -r f1 f2 f3 f4 f5 <<< "$line"
-    if [[ $first -eq 1 && -z "$f3" ]]; then
-      PROXY_TYPE="$f1"; NETWORK_NAME="$f2"; first=0
-    else
+    if [[ $np -ge 4 ]]; then
       SVCS+=("$f1"); URLS+=("$f2"); HOSTS+=("$f3"); PREFIXES+=("$f4"); DOMAINS+=("$f5")
+    elif [[ $np -eq 2 ]]; then
+      PROXY_TYPE="$f1"; NETWORK_NAME="$f2"; TEMPLATE_MD5_STORED="$f3"
+    elif [[ $np -eq 1 ]]; then
+      PROXY_TYPE="$f1"; NETWORK_NAME="$f2"
     fi
   done < "$INSTALL_DIR/instances.conf"
 }
@@ -469,6 +492,15 @@ gen_override() {
       echo "    external: true"
     fi
   } > "$INSTALL_DIR/compose.override.yml"
+}
+
+# brings the stack up; honors RECREATE (template changed since the last run)
+compose_up() {
+  if [[ "${RECREATE:-0}" == "1" ]]; then
+    (cd "$INSTALL_DIR" && docker compose up -d --force-recreate)
+  else
+    (cd "$INSTALL_DIR" && docker compose up -d)
+  fi
 }
 
 # ---------- per-proxy instructions (loop over instances) ---------------------
@@ -691,6 +723,16 @@ main() {
     ask_proxy
   fi
 
+  # --- template changed since the last run? (matters in keep mode only) ----
+  local RECREATE=0
+  if [[ $fresh -eq 0 ]]; then
+    local cur_md5
+    cur_md5="$(tpl_md5 "$INSTALL_DIR/templates/default.conf.template")" || cur_md5=""
+    if [[ "$TEMPLATE_MD5_STORED" != "$cur_md5" ]]; then
+      RECREATE=1
+    fi
+  fi
+
   # --- persist -------------------------------------------------------------
   PREFIX_OUT="${PREFIXES[0]:-}"; UPSTREAM_URL_OUT="${URLS[0]:-}"; UPSTREAM_HOST_OUT="${HOSTS[0]:-}"
   FQDN_OUT="${DOMAINS[0]:-}"; PROXY_OUT="${PROXY_TYPE}"
@@ -701,7 +743,7 @@ main() {
     gen_override ""   # single instance → file removed; multi → extra services on loopback
     say "Поднимаю контейнер(ы) — только loopback, прокси не настроен..." \
         "Bringing containers up — loopback only, no reverse proxy yet..."
-    (cd "$INSTALL_DIR" && docker compose up -d) || die "docker compose up не удался" "docker compose up failed"
+    compose_up || die "docker compose up не удался" "docker compose up failed"
     L "" >&2
     L "Реверс-прокси не настроен — это за рамками проекта." "No reverse proxy — that is outside this project's scope." >&2
     L "Самый простой вариант — Caddy (сертификаты сам): https://caddyserver.com/" "Simplest option — Caddy: https://caddyserver.com/" >&2
@@ -724,7 +766,11 @@ main() {
         "docker network '$NETWORK_NAME' does not exist — rerun the installer and answer r"
   fi
   say "Поднимаю контейнер(ы)..." "Bringing container(s) up..."
-  (cd "$INSTALL_DIR" && docker compose up -d) || die "docker compose up не удался — смотри вывод выше" "docker compose up failed — see the output above"
+  if [[ $RECREATE -eq 1 ]]; then
+    say "Шаблон nginx обновился с прошлого запуска — пересоздаю контейнеры..." \
+        "The nginx template changed since the last run — recreating containers..."
+  fi
+  compose_up || die "docker compose up не удался — смотри вывод выше" "docker compose up failed — see the output above"
 
   # --- summary -------------------------------------------------------------
   local i port code bip="${BIND_IP_OUT:-${BIND_IP:-127.0.0.1}}"

@@ -88,6 +88,9 @@ directly reachable, i.e. the server's region is NOT blocked by the service.
   otherwise the variable is uninitialized and nginx returns 500.
 - Prefix rotation = edit `.env` + `docker compose up -d` (a ~30 s 503 window
   is normal while the connector re-runs its health check).
+- Updates: rerun the one-liner installer and answer Enter (keep) — files are
+  refreshed from GitHub, state (prefixes, domains) is preserved; if the nginx
+  template changed, the installer recreates the containers itself.
 - Pointing at another API = set `UPSTREAM_URL` / `UPSTREAM_HOST` in `.env`
   (paths are forwarded as-is, so OpenAI, Anthropic and friends work the same).
 
