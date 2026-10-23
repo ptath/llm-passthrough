@@ -2,7 +2,7 @@
 
 A tiny passthrough reverse proxy for [OpenRouter](https://openrouter.ai) (and any other LLM API) in regions where it is blocked. Official `nginx:alpine` image, no builds, ~10 MB RAM. Sits behind your existing reverse proxy — Pangolin, Caddy, Nginx Proxy Manager, Traefik or plain nginx.
 
-**v0.1.0** · beta · [MIT](LICENSE)
+**v0.2.0** · beta · [MIT](LICENSE)
 
 > ⚠️ Bypassing regional restrictions may violate the upstream ToS — account risk is on you. Keep your proxy domain private, keep your API key local.
 
@@ -27,6 +27,16 @@ cd openrouter-passthrough
 ```
 
 `install.sh` creates `.env` with a random 32-char `SECRET_PREFIX` on first run and starts the container (listening on `127.0.0.1:8080`). Custom prefix: `SECRET_PREFIX=my-long-prefix ./install.sh`, or edit `.env` later and run `docker compose up -d`.
+
+## One-command install
+
+On a root-accessible server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+```
+
+The installer checks docker, probes which APIs are reachable from the machine, asks what to proxy, generates the secret prefix and a subdomain, detects your reverse proxy (Pangolin/NPM/Traefik/Caddy in docker) and writes `compose.override.yml` for you. `--lang en` switches the dialog language (Russian by default).
 
 ### Where to find your SECRET_PREFIX
 

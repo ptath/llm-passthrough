@@ -30,11 +30,25 @@ directly reachable, i.e. the server's region is NOT blocked by the service.
 
 1. Confirm the requirements above with the user, explicitly including the
    region/reachability question.
-2. On the server: clone the repo (or copy its files), run `./install.sh`.
-   It creates `.env` with a random 32-char `SECRET_PREFIX` and starts the
-   container on `127.0.0.1:8080` (loopback only).
+2. On the server, install. Preferred — the interactive installer (it checks
+   docker, probes reachability, asks what to proxy, generates the secret
+   prefix and subdomain, detects the reverse proxy and writes
+   `compose.override.yml` itself):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+   ```
+   For non-interactive (agent) runs, pipe the answers and use env overrides —
+   the installer reads input from /dev/tty with a stdin fallback:
+   ```bash
+   printf '1\n\ndomain.tld\n\n1\n' | \
+     OPENROUTER_PASSTHROUGH_DIR=/opt/openrouter-passthrough bash install.sh --lang en
+   # answer order: upstream choice, prefix (empty = generated), base domain,
+   #               subdomain label (empty = generated), reverse-proxy choice
+   ```
+   Alternatively, clone the repo and run `./install.sh` — no download needed.
 3. Ask which reverse proxy the user already runs and follow the matching
-   example in `examples/`:
+   example in `examples/` (the installer does most of this automatically; the
+   examples remain the manual reference):
    - Pangolin connector on the same host → `examples/pangolin/`
    - Caddy → `examples/caddy/` (no container needed at all)
    - Nginx Proxy Manager → `examples/nginx-proxy-manager/`

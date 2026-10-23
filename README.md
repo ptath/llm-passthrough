@@ -2,11 +2,28 @@
 
 Крошечный passthrough-реверс-прокси для [OpenRouter](https://openrouter.ai) и любого другого LLM API, недоступного из вашего региона. Официальный образ `nginx:alpine`, без сборок, ~10 МБ RAM. Ставится за вашим реверс-прокси — Pangolin, Caddy, Nginx Proxy Manager, Traefik или голым nginx.
 
-**v0.1.0** · beta · [MIT](LICENSE)
+**v0.2.0** · beta · [MIT](LICENSE)
 
 > ⚠️ **Дисклеймер.** Обход региональных ограничений может нарушать ToS апстрима — есть риск для аккаунта. Всё, что вы делаете, вы делаете на свой страх и риск. Домен прокси не публикуйте, ключ храните у себя.
 
 English short version: [README.en.md](README.en.md)
+
+## Установка одной командой
+
+На сервере (VPS) с root-доступом:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+```
+
+Установщик сам проверит docker, покажет, какие API доступны с этой машины, спросит, что проксировать, сгенерирует секретный префикс и поддомен, найдёт твой реверс-прокси (Pangolin/NPM/Traefik/Caddy в docker) и напишет за тебя `compose.override.yml`. Для недоверчивых — скачать и прочитать перед запуском:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh -o install.sh
+less install.sh && bash install.sh
+```
+
+Параметры: `--lang en` переключает диалог на английский (по умолчанию русский).
 
 ## Зачем
 
@@ -29,7 +46,7 @@ OpenRouter (как и ряд других сервисов) блокирует �
 - Docker 20+ с плагином compose (`docker compose version`)
 - Домен с A-записью на этот VPS + реверс-прокси с TLS (см. таблицу ниже)
 
-## Быстрый старт
+## Быстрый старт (ручная установка)
 
 ```bash
 git clone https://github.com/ptath/openrouter-passthrough.git
@@ -37,7 +54,7 @@ cd openrouter-passthrough
 ./install.sh
 ```
 
-`install.sh` при первом запуске:
+`install.sh` можно запустить и из клона — он задаст те же вопросы и не будет ничего скачивать. При первом запуске:
 
 - создаст `.env` и сгенерирует случайный `SECRET_PREFIX` (32 hex-символа); свой вариант можно задать заранее: `SECRET_PREFIX=my-long-prefix ./install.sh` — или потом отредактировать `.env` и сделать `docker compose up -d`
 - поднимет контейнер, слушающий `127.0.0.1:8080` (только loopback, для локальных проверок)
@@ -125,6 +142,7 @@ curl -N https://openrouter.example.com/<SECRET_PREFIX>/api/v1/chat/completions \
 | `SECRET_PREFIX` | генерируется install.sh | обязательна; часть ваших URL |
 | `UPSTREAM_URL` | `https://openrouter.ai` | куда форвардить |
 | `UPSTREAM_HOST` | `openrouter.ai` | SNI/Host для апстрима |
+| `BIND_IP` / `BIND_PORT` | `127.0.0.1` / `8080` | адрес отладочного листенера; для прокси на другой машине — `0.0.0.0` и открытый порт |
 
 Другой API — меняются две переменные, например OpenAI: `UPSTREAM_URL=https://api.openai.com`, `UPSTREAM_HOST=api.openai.com`. Пути проксируются как есть, так что заведётся и Anthropic (`/v1/messages`), и любой другой HTTP API.
 
@@ -162,7 +180,7 @@ curl -N https://openrouter.example.com/<SECRET_PREFIX>/api/v1/chat/completions \
 
 **Почему не LiteLLM / one-api?** Это шлюзы (виртуальные ключи, лимиты, логи), им нужно 300+ МБ RAM и БД. Здесь задача одна — достучаться, и это ~10 МБ RAM.
 
-**Несколько апстримов?** Скопируйте папку, в копии поменяйте `container_name`, префикс и апстрим; проект можно изолировать через `COMPOSE_PROJECT_NAME` в её `.env`.
+**Несколько апстримов?** Скопируйте папку, в её `compose.yml` переименуйте сервис (`openrouter-proxy:` под `services:` — это имя станет DNS-именем в общей сети), в её `.env` поменяйте префикс и апстрим; проект изолируется через `COMPOSE_PROJECT_NAME` в её `.env`.
 
 ## Лицензия
 

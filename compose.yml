@@ -1,10 +1,12 @@
 services:
   openrouter-proxy:
     image: nginx:alpine
-    container_name: openrouter-proxy
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:80" # loopback only — for local checks. Real traffic goes through your reverse proxy / docker network.
+      # loopback by default — for local checks. Real traffic goes through your
+      # reverse proxy / docker network. For a proxy on ANOTHER machine:
+      # BIND_IP=0.0.0.0 and BIND_PORT=<port> in .env.
+      - "${BIND_IP:-127.0.0.1}:${BIND_PORT:-8080}:80"
     environment:
       # Required. install.sh generates a random value into .env on first run.
       SECRET_PREFIX: ${SECRET_PREFIX:?SECRET_PREFIX is not set — run ./install.sh or create .env}
