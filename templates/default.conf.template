@@ -10,9 +10,11 @@ server {
     # Only the secret prefix is proxied upstream; everything else is a hard 404.
     location = /${SECRET_PREFIX} { return 301 /${SECRET_PREFIX}/$is_args$args; }
     location /${SECRET_PREFIX}/ {
-        # ipv6=off: containers usually have no IPv6 route; if the resolver
-        # answers with AAAA only, nginx would fail with "network unreachable".
-        resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
+        # 127.0.0.11 — docker's embedded DNS (fast, always available in the
+        # container); public resolvers as fallback. ipv6=off: containers
+        # usually have no IPv6 route, and an AAAA-only answer would fail
+        # with "network unreachable".
+        resolver 127.0.0.11 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
         resolver_timeout 5s;
 
         # NOTE: `set` must come BEFORE `rewrite ... break`,

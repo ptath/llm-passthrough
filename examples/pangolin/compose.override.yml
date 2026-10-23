@@ -3,7 +3,7 @@
 # connector (fosrl/pangolin-cli / newt) running on the same host,
 # so the Pangolin resource can reach it by container name.
 services:
-  openrouter-proxy:
+  passthrough:
     networks: [pangolin]
 
 networks:

@@ -1,5 +1,5 @@
 services:
-  openrouter-proxy:
+  passthrough:
     image: nginx:alpine
     restart: unless-stopped
     ports:

@@ -1,6 +1,6 @@
 # AGENTS.md — guidance for AI coding agents
 
-This repository is **openrouter-passthrough**: a tiny passthrough reverse
+This repository is **llm-passthrough**: a tiny passthrough reverse
 proxy (official `nginx:alpine` image, no builds) that lets apps reach a
 region-blocked HTTP API — OpenRouter by default — through the user's own
 server abroad. You are probably reading this because the user pasted the repo
@@ -35,13 +35,13 @@ directly reachable, i.e. the server's region is NOT blocked by the service.
    prefix and subdomain, detects the reverse proxy and writes
    `compose.override.yml` itself):
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash
    ```
    For non-interactive (agent) runs, pipe the answers and use env overrides —
    the installer reads input from /dev/tty with a stdin fallback:
    ```bash
    printf '1\n\ndomain.tld\n\n\n1\n' | \
-     OPENROUTER_PASSTHROUGH_DIR=/opt/openrouter-passthrough bash install.sh --lang en
+     LLM_PASSTHROUGH_DIR=/opt/llm-passthrough bash install.sh --lang en
    # answer order: upstream choice, prefix (empty = generated), base domain,
    #               subdomain label (empty = generated), add-another? (empty = N),
    #               reverse-proxy choice

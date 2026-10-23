@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# openrouter-passthrough — interactive installer (v0.3.0, multi-provider)
+# llm-passthrough — interactive installer (v0.4.0, multi-provider)
 #
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash
 # Or download first, inspect, then run:  bash install.sh [--lang en]
 #
 # Env overrides (rarely needed):
-#   OPENROUTER_PASSTHROUGH_DIR  install location (default /opt/openrouter-passthrough)
+#   LLM_PASSTHROUGH_DIR         install location (default /opt/llm-passthrough)
 #   BIND_IP / BIND_PORT         bind for the debug listener (defaults 127.0.0.1/8080)
 #
 # Multi-provider: answer "y" to "add another proxy" — each provider gets its
@@ -14,9 +14,9 @@
 
 set -u
 
-REPO_TARBALL="https://github.com/ptath/openrouter-passthrough/archive/refs/heads/main.tar.gz"
-INSTALL_DIR="${OPENROUTER_PASSTHROUGH_DIR:-/opt/openrouter-passthrough}"
-TMP_TGZ="/tmp/openrouter-passthrough.$$.tgz"
+REPO_TARBALL="https://github.com/ptath/llm-passthrough/archive/refs/heads/main.tar.gz"
+INSTALL_DIR="${LLM_PASSTHROUGH_DIR:-/opt/llm-passthrough}"
+TMP_TGZ="/tmp/llm-passthrough.$$.tgz"
 trap 'rm -f "$TMP_TGZ"' EXIT
 
 # ---------- CLI flags --------------------------------------------------------
@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
     --lang=*) UI_LANG="${1#*=}"; shift ;;
     -h|--help)
       echo "usage: install.sh [--lang ru|en]"
-      echo "  curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash"
+      echo "  curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash"
       exit 0 ;;
     *) shift ;;
   esac
@@ -371,7 +371,7 @@ NO_PROXY=0
 add_instance() {
   local svc
   if [[ ${#SVCS[@]} -eq 0 ]]; then
-    svc="openrouter-proxy"
+    svc="passthrough"
   else
     svc=$(unique_service_name "$(derive_service_name "$UPSTREAM_HOST_OUT")")
   fi
@@ -637,7 +637,7 @@ env_get() { grep -E "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | head -n1 | cut -d= 
 main() {
   say() { L "==> $1" "==> $2"; }
 
-  L "openrouter-passthrough — установка" "openrouter-passthrough — installer" >&2
+  L "llm-passthrough — установка" "llm-passthrough — installer" >&2
   L "=====================================" "=====================================" >&2
 
   preflight
@@ -661,7 +661,7 @@ main() {
     UPSTREAM_URL_OUT=$(env_get UPSTREAM_URL); UPSTREAM_URL_OUT=${UPSTREAM_URL_OUT:-https://openrouter.ai}
     UPSTREAM_HOST_OUT=$(env_get UPSTREAM_HOST); UPSTREAM_HOST_OUT=${UPSTREAM_HOST_OUT:-openrouter.ai}
     FQDN_OUT=$(env_get DOMAIN)
-    SVCS=("openrouter-proxy"); URLS=("$UPSTREAM_URL_OUT"); HOSTS=("$UPSTREAM_HOST_OUT")
+    SVCS=("passthrough"); URLS=("$UPSTREAM_URL_OUT"); HOSTS=("$UPSTREAM_HOST_OUT")
     PREFIXES=("$PREFIX_OUT"); DOMAINS=("$FQDN_OUT")
     PROXY_TYPE=$(env_get PROXY_TYPE)
     keep_answer=$(ask "Найден старый .env — оставить как есть? (Enter = да, r = перенастроить):" \

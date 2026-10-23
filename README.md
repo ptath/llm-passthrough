@@ -1,8 +1,8 @@
-# openrouter-passthrough
+# llm-passthrough
 
 Крошечный passthrough-реверс-прокси для [OpenRouter](https://openrouter.ai) и любого другого LLM API, недоступного из вашего региона. Официальный образ `nginx:alpine`, без сборок, ~10 МБ RAM. Ставится за вашим реверс-прокси — Pangolin, Caddy, Nginx Proxy Manager, Traefik или голым nginx.
 
-**v0.3.0** · beta · [MIT](LICENSE)
+**v0.4.0** · beta · [MIT](LICENSE)
 
 > ⚠️ **Дисклеймер.** Обход региональных ограничений может нарушать ToS апстрима — есть риск для аккаунта. Всё, что вы делаете, вы делаете на свой страх и риск. Домен прокси не публикуйте, ключ храните у себя.
 
@@ -13,13 +13,13 @@ English short version: [README.en.md](README.en.md)
 На сервере (VPS) с root-доступом:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash
 ```
 
 Установщик сам проверит docker, покажет, какие API доступны с этой машины, спросит, что проксировать, сгенерирует секретный префикс и поддомен, найдёт твой реверс-прокси (Pangolin/NPM/Traefik/Caddy в docker) и напишет за тебя `compose.override.yml`. Можно проксировать сразу несколько API — на вопрос «Добавить ещё один прокси?» отвечай `y` (см. [ниже](#несколько-провайдеров-на-одном-сервере)). Для недоверчивых — скачать и прочитать перед запуском:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh -o install.sh
 less install.sh && bash install.sh
 ```
 
@@ -33,7 +33,7 @@ less install.sh && bash install.sh
 - свой секретный префикс;
 - свой поддомен и, соответственно, свой ресурс в Pangolin (или хост в NPM, блок в Caddy/Traefik/nginx — установщик печатает инструкции по каждому).
 
-Имена сервисов выводятся в итоговой сводке: первый всегда называется `openrouter-proxy` (имя базового сервиса из `compose.yml`, независимо от того, чей апстрим первый), остальные — по провайдеру: `openai-proxy`, `anthropic-proxy`, `gemini-proxy`, `<метка>-proxy` для своих URL.
+Имена сервисов выводятся в итоговой сводке: первый всегда называется `passthrough` (имя базового сервиса из `compose.yml`, независимо от того, чей апстрим первый), остальные — по провайдеру: `openai-proxy`, `anthropic-proxy`, `gemini-proxy`, `<метка>-proxy` для своих URL.
 
 Состояние хранится в `instances.conf` (права 600). Повторный запуск установщика:
 
@@ -48,7 +48,7 @@ OpenRouter (как и ряд других сервисов) блокирует �
 
 ```
 приложение ──► ваш домен (TLS: ваш реверс-прокси)
-                 └─► openrouter-proxy (этот контейнер, HTTP)
+                 └─► passthrough (этот контейнер, HTTP)
                        └─► https://openrouter.ai (SNI/Host подменяются)
 ```
 
@@ -66,8 +66,8 @@ OpenRouter (как и ряд других сервисов) блокирует �
 ## Быстрый старт (ручная установка)
 
 ```bash
-git clone https://github.com/ptath/openrouter-passthrough.git
-cd openrouter-passthrough
+git clone https://github.com/ptath/llm-passthrough.git
+cd llm-passthrough
 ./install.sh
 ```
 
@@ -89,7 +89,7 @@ Base URL для приложений: `https://твой-домен/<SECRET_PREFI
 Если `.env` потерялся, а контейнер ещё работает — префикс можно вытащить из его окружения:
 
 ```bash
-docker exec openrouter-proxy env | grep SECRET_PREFIX
+docker compose exec passthrough env | grep SECRET_PREFIX
 ```
 
 Пересоздайте `.env` с этим же значением — тогда конфигурацию приложений менять не придётся.
@@ -183,7 +183,7 @@ curl -N https://openrouter.example.com/<SECRET_PREFIX>/api/v1/chat/completions \
 - **Ответы приходят одним куском.** Где-то включена буферизация: у nginx — `proxy_buffering off`, в NPM — включите Websockets, в Caddy и Traefik стриминг по умолчанию.
 - **Обрывы длинных ответов.** Таймауты: проверьте `proxy_read_timeout` у себя и таймауты вашего реверс-прокси.
 - **Ротация префикса.** Правьте `.env` → `docker compose up -d`. При рестарте за Pangolin будет ~30 сек 503 (health check перезаходит).
-- **`.env` потерялся.** Если контейнер ещё работает, достаньте префикс из его окружения: `docker exec openrouter-proxy env | grep SECRET_PREFIX` — пересоздайте `.env` с этим же значением, приложения трогать не придётся. Если контейнер уже пересоздан — запустите `./install.sh` заново: префикс будет новый, обновите Base URL в приложениях.
+- **`.env` потерялся.** Если контейнер ещё работает, достаньте префикс из его окружения: `docker compose exec passthrough env | grep SECRET_PREFIX` — пересоздайте `.env` с этим же значением, приложения трогать не придётся. Если контейнер уже пересоздан — запустите `./install.sh` заново: префикс будет новый, обновите Base URL в приложениях.
 
 ## Безопасность
 
@@ -200,7 +200,7 @@ curl -N https://openrouter.example.com/<SECRET_PREFIX>/api/v1/chat/completions \
 
 **Почему не LiteLLM / one-api?** Это шлюзы (виртуальные ключи, лимиты, логи), им нужно 300+ МБ RAM и БД. Здесь задача одна — достучаться, и это ~10 МБ RAM.
 
-**Несколько апстримов?** Теперь штатно: при установке ответь `y` на вопрос «Добавить ещё один прокси?» — каждый провайдер получит свой контейнер, префикс и поддомен (см. [«Несколько провайдеров»](#несколько-провайдеров-на-одном-сервере)). Ручной вариант для отдельных проектов: скопируй папку, в её `compose.yml` переименуй сервис (`openrouter-proxy:` под `services:` — это имя станет DNS-именем в общей сети), в её `.env` поменяй префикс и апстрим; проект изолируется через `COMPOSE_PROJECT_NAME` в её `.env`.
+**Несколько апстримов?** Теперь штатно: при установке ответь `y` на вопрос «Добавить ещё один прокси?» — каждый провайдер получит свой контейнер, префикс и поддомен (см. [«Несколько провайдеров»](#несколько-провайдеров-на-одном-сервере)). Ручной вариант для отдельных проектов: скопируй папку, в её `compose.yml` переименуй сервис (`passthrough:` под `services:` — это имя станет DNS-именем в общей сети), в её `.env` поменяй префикс и апстрим; проект изолируется через `COMPOSE_PROJECT_NAME` в её `.env`.
 
 ## Лицензия
 

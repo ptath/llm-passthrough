@@ -1,8 +1,8 @@
-# openrouter-passthrough
+# llm-passthrough
 
 A tiny passthrough reverse proxy for [OpenRouter](https://openrouter.ai) (and any other LLM API) in regions where it is blocked. Official `nginx:alpine` image, no builds, ~10 MB RAM. Sits behind your existing reverse proxy — Pangolin, Caddy, Nginx Proxy Manager, Traefik or plain nginx.
 
-**v0.3.0** · beta · [MIT](LICENSE)
+**v0.4.0** · beta · [MIT](LICENSE)
 
 > ⚠️ Bypassing regional restrictions may violate the upstream ToS — account risk is on you. Keep your proxy domain private, keep your API key local.
 
@@ -21,8 +21,8 @@ app ──► https://openrouter.example.com/<SECRET_PREFIX>   (TLS at your reve
 ## Quick start
 
 ```bash
-git clone https://github.com/ptath/openrouter-passthrough.git
-cd openrouter-passthrough
+git clone https://github.com/ptath/llm-passthrough.git
+cd llm-passthrough
 ./install.sh
 ```
 
@@ -33,7 +33,7 @@ cd openrouter-passthrough
 On a root-accessible server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash
 ```
 
 The installer checks docker, probes which APIs are reachable from the machine, asks what to proxy, generates the secret prefix and a subdomain, detects your reverse proxy (Pangolin/NPM/Traefik/Caddy in docker) and writes `compose.override.yml` for you. Answer `y` to "Add another proxy?" to serve several APIs from one server — each gets its own container, prefix and subdomain. Rerunning the installer offers Enter = keep (rebuild from `instances.conf`, zero questions) or `r` = full reconfiguration. `--lang en` switches the dialog language (Russian by default).
@@ -46,7 +46,7 @@ It is printed at the end of `install.sh` and stored in `.env`:
 grep SECRET_PREFIX .env
 ```
 
-Apps use a Base URL like `https://your.domain/<SECRET_PREFIX>` (they append `/api/v1` themselves). If `.env` is lost but the container still runs, recover it: `docker exec openrouter-proxy env | grep SECRET_PREFIX`.
+Apps use a Base URL like `https://your.domain/<SECRET_PREFIX>` (they append `/api/v1` themselves). If `.env` is lost but the container still runs, recover it: `docker compose exec passthrough env | grep SECRET_PREFIX`.
 
 ## Hooking it into your reverse proxy
 

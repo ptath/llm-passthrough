@@ -21,7 +21,7 @@ Resources → Create Resource:
 
 - **Site** — сайт этого коннектора
 - **Domain** — `openrouter.example.com` (поддомен вашего домена; его DNS должен указывать на сервер Pangolin)
-- **Target** — метод `http`, адрес `openrouter-proxy`, порт `80` (имя резолвится по docker-сети; **не** `127.0.0.1` — у коннектора свой loopback)
+- **Target** — метод `http`, адрес `passthrough`, порт `80` (имя резолвится по docker-сети; **не** `127.0.0.1` — у коннектора свой loopback)
 - **Authentication** — выключить (иначе API-клиенты со своим `Authorization` не пройдут)
 - **Bot protection / блокеры** — выключить
 

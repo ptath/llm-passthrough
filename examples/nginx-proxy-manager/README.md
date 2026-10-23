@@ -14,7 +14,7 @@
 2. `./install.sh` из корня репо.
 3. В NPM: **Hosts → Proxy Hosts → Add Proxy Host**:
    - **Domain**: `openrouter.example.com`
-   - **Forward**: scheme `http`, hostname `openrouter-proxy`, port `80`
+   - **Forward**: scheme `http`, hostname `passthrough`, port `80`
    - **Websockets**: ON (стриминг SSE)
    - **Caching**: off, **Block common exploits**: если начнутся странности с API — выключите
    - **SSL**: выпустите серт (Request a new certificate) + Force SSL
