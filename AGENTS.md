@@ -40,11 +40,17 @@ directly reachable, i.e. the server's region is NOT blocked by the service.
    For non-interactive (agent) runs, pipe the answers and use env overrides —
    the installer reads input from /dev/tty with a stdin fallback:
    ```bash
-   printf '1\n\ndomain.tld\n\n1\n' | \
+   printf '1\n\ndomain.tld\n\n\n1\n' | \
      OPENROUTER_PASSTHROUGH_DIR=/opt/openrouter-passthrough bash install.sh --lang en
    # answer order: upstream choice, prefix (empty = generated), base domain,
-   #               subdomain label (empty = generated), reverse-proxy choice
+   #               subdomain label (empty = generated), add-another? (empty = N),
+   #               reverse-proxy choice
    ```
+   Multi-provider: answer `y` to the add-another question and repeat the
+   upstream/prefix/domain triple for each extra provider. Every provider gets
+   its own service, secret prefix and subdomain; state lives in
+   `instances.conf` in the install dir (rerun the installer with Enter to
+   rebuild from it without questions).
    Alternatively, clone the repo and run `./install.sh` — no download needed.
 3. Ask which reverse proxy the user already runs and follow the matching
    example in `examples/` (the installer does most of this automatically; the

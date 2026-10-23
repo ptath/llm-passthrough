@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openrouter-passthrough — interactive installer (v0.2.1)
+# openrouter-passthrough — interactive installer (v0.3.0, multi-provider)
 #
 # One-liner:
 #   curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
@@ -8,6 +8,9 @@
 # Env overrides (rarely needed):
 #   OPENROUTER_PASSTHROUGH_DIR  install location (default /opt/openrouter-passthrough)
 #   BIND_IP / BIND_PORT         bind for the debug listener (defaults 127.0.0.1/8080)
+#
+# Multi-provider: answer "y" to "add another proxy" — each provider gets its
+# own container, secret prefix and subdomain. State: instances.conf.
 
 set -u
 
@@ -68,6 +71,10 @@ ask() {
 # HTTP code of a URL ("000" on failure). Uses curl; presence is checked in preflight.
 probe() { curl -s -o /dev/null -w '%{http_code}' --max-time "${2:-6}" "$1" 2>/dev/null; }
 
+# Same, but with a deliberately invalid key: public endpoints stay 200,
+# key-gated ones answer 401 — both mean "reachable and passthrough intact".
+probe_auth() { curl -s -o /dev/null -w '%{http_code}' --max-time "${2:-6}" -H 'Authorization: Bearer sk-invalid-probe' "$1" 2>/dev/null; }
+
 # classify: ok / maybe-blocked (403) / unknown (000, timeout, DNS)
 verdict_class() {
   case "$1" in
@@ -117,10 +124,46 @@ public_ip() {
     || echo "?"
 }
 
+# ---------- instance naming --------------------------------------------------
+sanitize_name() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'
+}
+
+# short service name for an upstream host
+derive_service_name() {
+  local base
+  case "$1" in
+    openrouter.ai)                      base="openrouter" ;;
+    api.openai.com)                     base="openai" ;;
+    api.anthropic.com)                  base="anthropic" ;;
+    generativelanguage.googleapis.com)  base="gemini" ;;
+    *)
+      base="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+      base="${base#api.}"; base="${base#llm.}"; base="${base#chat.}"
+      base="${base%%.*}"            # first meaningful label, before sanitize turns dots into dashes
+      base="$(sanitize_name "$base")"
+      [[ -z "$base" ]] && base="proxy"
+      ;;
+  esac
+  printf '%s-proxy' "$base"
+}
+
+array_contains() {
+  local x
+  for x in ${SVCS[@]+"${SVCS[@]}"}; do [[ "$x" == "$1" ]] && return 0; done
+  return 1
+}
+
+unique_service_name() {
+  local name="$1" n=2
+  while array_contains "$name"; do name="${1}-$n"; n=$((n+1)); done
+  printf '%s' "$name"
+}
+
 # ---------- preflight --------------------------------------------------------
 preflight() {
-  say() { L "==> $1" "==> $2"; }
-
   if [[ $EUID -ne 0 ]]; then
     if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
       die "нет прав на $INSTALL_DIR — запусти с sudo:  curl -fsSL <url> | sudo bash" \
@@ -218,10 +261,10 @@ choose_upstream() {
     choice=$(ask "Номер (Enter = 1):" "Number (Enter = 1):" "1")
 
     case "$choice" in
-      1) UPSTREAM_URL="https://openrouter.ai";                        UPSTREAM_HOST="openrouter.ai";                        url="https://openrouter.ai/api/v1/models" ;;
-      2) UPSTREAM_URL="https://api.openai.com";                       UPSTREAM_HOST="api.openai.com";                       url="https://api.openai.com/v1/models" ;;
-      3) UPSTREAM_URL="https://api.anthropic.com";                    UPSTREAM_HOST="api.anthropic.com";                    url="https://api.anthropic.com/v1/models" ;;
-      4) UPSTREAM_URL="https://generativelanguage.googleapis.com";    UPSTREAM_HOST="generativelanguage.googleapis.com";    url="https://generativelanguage.googleapis.com/" ;;
+      1) UPSTREAM_URL="https://openrouter.ai";                     UPSTREAM_HOST="openrouter.ai";                     url="https://openrouter.ai/api/v1/models" ;;
+      2) UPSTREAM_URL="https://api.openai.com";                    UPSTREAM_HOST="api.openai.com";                    url="https://api.openai.com/v1/models" ;;
+      3) UPSTREAM_URL="https://api.anthropic.com";                 UPSTREAM_HOST="api.anthropic.com";                 url="https://api.anthropic.com/v1/models" ;;
+      4) UPSTREAM_URL="https://generativelanguage.googleapis.com"; UPSTREAM_HOST="generativelanguage.googleapis.com"; url="https://generativelanguage.googleapis.com/" ;;
       5)
         ans=$(ask "URL апстрима, например https://api.example.com:" "Upstream URL, e.g. https://api.example.com:" "")
         [[ -z "$ans" ]] && continue
@@ -261,6 +304,8 @@ choose_upstream() {
   done
 }
 
+DETECT_FAILED=0
+
 # ---------- step: secret prefix ----------------------------------------------
 choose_prefix() {
   local PREFIX p
@@ -281,16 +326,19 @@ choose_prefix() {
 }
 
 # ---------- step: domain -----------------------------------------------------
+BASE_DEFAULT=""   # remembered between providers in the multi loop
+
 choose_domain() {
   local BASE LABEL FQDN rip sip
   L "" >&2
   while :; do
-    BASE=$(ask "Твой базовый домен (например, mydomain.tld):" "Your base domain (e.g. mydomain.tld):" "")
+    BASE=$(ask "Твой базовый домен (например, mydomain.tld):" "Your base domain (e.g. mydomain.tld):" "$BASE_DEFAULT")
     BASE="$(printf '%s' "$BASE" | tr '[:upper:]' '[:lower:]')"
     BASE="${BASE// /}"
     if [[ "$BASE" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]]; then break; fi
     L "Не похоже на домен. Пример: mydomain.tld" "Does not look like a domain. Example: mydomain.tld" >&2
   done
+  BASE_DEFAULT="$BASE"
   LABEL=$(gen_label)
   FQDN=$(ask "Поддомен — метка или полное имя (Enter = сгенерированный):" "Subdomain — label or full name (Enter = generated):" "${LABEL}.${BASE}")
   FQDN="$(printf '%s' "$FQDN" | tr '[:upper:]' '[:lower:]')"
@@ -312,9 +360,56 @@ choose_domain() {
   fi
 }
 
-# ---------- step: reverse proxy ----------------------------------------------
+# ---------- instances state --------------------------------------------------
+SVCS=(); URLS=(); HOSTS=(); PREFIXES=(); DOMAINS=()
+NETWORK_NAME=""
+PROXY_TYPE=""
+BIND_IP_OUT=""; BIND_PORT_OUT=""
+NO_PROXY=0
+
+# first instance always lives in the base compose service (its key is fixed)
+add_instance() {
+  local svc
+  if [[ ${#SVCS[@]} -eq 0 ]]; then
+    svc="openrouter-proxy"
+  else
+    svc=$(unique_service_name "$(derive_service_name "$UPSTREAM_HOST_OUT")")
+  fi
+  SVCS+=("$svc"); URLS+=("$UPSTREAM_URL_OUT"); HOSTS+=("$UPSTREAM_HOST_OUT")
+  PREFIXES+=("$PREFIX_OUT"); DOMAINS+=("$FQDN_OUT")
+}
+
+save_instances() {
+  local i
+  mkdir -p "$INSTALL_DIR"
+  {
+    echo "# proxy_type | network (empty = none)"
+    echo "${PROXY_TYPE:-}|${NETWORK_NAME:-}"
+    echo "# service | upstream_url | upstream_host | prefix | domain"
+    for ((i=0; i<${#SVCS[@]}; i++)); do
+      printf '%s|%s|%s|%s|%s\n' "${SVCS[$i]}" "${URLS[$i]}" "${HOSTS[$i]}" "${PREFIXES[$i]}" "${DOMAINS[$i]}"
+    done
+  } > "$INSTALL_DIR/instances.conf"
+  chmod 600 "$INSTALL_DIR/instances.conf"
+}
+
+load_instances() {
+  SVCS=(); URLS=(); HOSTS=(); PREFIXES=(); DOMAINS=()
+  local line first=1 f1 f2 f3 f4 f5
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    IFS='|' read -r f1 f2 f3 f4 f5 <<< "$line"
+    if [[ $first -eq 1 && -z "$f3" ]]; then
+      PROXY_TYPE="$f1"; NETWORK_NAME="$f2"; first=0
+    else
+      SVCS+=("$f1"); URLS+=("$f2"); HOSTS+=("$f3"); PREFIXES+=("$f4"); DOMAINS+=("$f5")
+    fi
+  done < "$INSTALL_DIR/instances.conf"
+}
+
+# ---------- reverse proxy ----------------------------------------------------
 detect_network() { # pattern -> echoes "container|network"; empty on failure
-  local line id name nets count sel i
+  local line id name nets count sel i all n
   line=$(docker ps --format '{{.ID}}|{{.Image}}|{{.Names}}' 2>/dev/null | grep -iE "$1" | head -n1)
   [[ -z "$line" ]] && return 1
   id="${line%%|*}"
@@ -325,7 +420,7 @@ detect_network() { # pattern -> echoes "container|network"; empty on failure
   count=$(printf '%s\n' "$nets" | wc -l | tr -d ' ')
   if [[ "$count" -gt 1 ]]; then
     L "У контейнера $name несколько сетей:" "Container $name is on several networks:" >&2
-    i=1; local all
+    i=1; all=""
     while IFS= read -r n; do L "  $i) $n" "  $i) $n" >&2; all+="$n"$'\n'; i=$((i+1)); done <<< "$nets"
     sel=$(ask "Какую использовать? (номер):" "Which one? (number):" "1")
     n=$(printf '%s\n' "$all" | sed -n "${sel}p")
@@ -336,69 +431,141 @@ detect_network() { # pattern -> echoes "container|network"; empty on failure
   fi
 }
 
-write_override() { # network name
-  cat > "$INSTALL_DIR/compose.override.yml" <<EOF
-# Generated by install.sh — attaches the proxy container to the docker
-# network of your reverse proxy, so it is reachable by container name.
-services:
-  openrouter-proxy:
-    networks: [extnet]
+# generates compose.override.yml for ALL instances; empty network → no networks
+gen_override() {
+  local net="$1" i
+  local bip="${BIND_IP_OUT:-${BIND_IP:-127.0.0.1}}"
 
-networks:
-  extnet:
-    name: $1
-    external: true
-EOF
+  if [[ -z "$net" && ${#SVCS[@]} -le 1 ]]; then
+    rm -f "$INSTALL_DIR/compose.override.yml"
+    return 0
+  fi
+
+  {
+    echo "# Generated by install.sh — rerun the installer to regenerate."
+    if [[ -n "$net" ]]; then
+      echo "services:"
+      echo "  ${SVCS[0]}:"
+      echo "    networks: [extnet]"
+    fi
+    for ((i=1; i<${#SVCS[@]}; i++)); do
+      echo "  ${SVCS[$i]}:"
+      echo "    image: nginx:alpine"
+      echo "    restart: unless-stopped"
+      echo "    environment:"
+      echo "      SECRET_PREFIX: \"${PREFIXES[$i]}\""
+      echo "      UPSTREAM_URL: \"${URLS[$i]}\""
+      echo "      UPSTREAM_HOST: \"${HOSTS[$i]}\""
+      echo "    ports:"
+      echo "      - \"${bip}:$((8080+i)):80\""
+      echo "    volumes:"
+      echo "      - ./templates:/etc/nginx/templates:ro"
+      [[ -n "$net" ]] && echo "    networks: [extnet]"
+    done
+    if [[ -n "$net" ]]; then
+      echo "networks:"
+      echo "  extnet:"
+      echo "    name: $net"
+      echo "    external: true"
+    fi
+  } > "$INSTALL_DIR/compose.override.yml"
 }
 
+# ---------- per-proxy instructions (loop over instances) ---------------------
 print_pangolin_steps() {
+  local i
   L "" >&2
-  L "==> Осталось в дашборде Pangolin (Resources → Create Resource):" "==> Remaining steps in the Pangolin dashboard (Resources → Create Resource):" >&2
-  L "    Site: сайт этого коннектора" "    Site: this connector's site" >&2
-  L "    Domain: $1" "    Domain: $1" >&2
-  L "    Target: метод http, адрес openrouter-proxy, порт 80" "    Target: method http, address openrouter-proxy, port 80" >&2
-  L "    Authentication: выключить; Bot protection: выключить" "    Authentication: off; Bot protection: off" >&2
-  L "    После создания проверь: curl https://$1/$2/api/v1/models" "    After that check: curl https://$1/$2/api/v1/models" >&2
+  L "==> Дашборд Pangolin (Resources → Create Resource) — по ресурсу на инстанс:" "==> Pangolin dashboard (Resources → Create Resource) — one resource per instance:" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    L "  $((i+1))) Domain: ${DOMAINS[$i]}; Target: метод http, адрес ${SVCS[$i]}, порт 80; auth off, bot-protection off" \
+      "  $((i+1))) Domain: ${DOMAINS[$i]}; Target: method http, address ${SVCS[$i]}, port 80; auth off, bot-protection off" >&2
+  done
+  L "    После создания проверь: curl https://${DOMAINS[0]}/${PREFIXES[0]}/api/v1/models" "    Then check: curl https://${DOMAINS[0]}/${PREFIXES[0]}/api/v1/models" >&2
 }
 
 print_npm_steps() {
+  local i
   L "" >&2
-  L "==> В Nginx Proxy Manager (Hosts → Proxy Hosts → Add):" "==> In Nginx Proxy Manager (Hosts → Proxy Hosts → Add):" >&2
-  L "    Domain: $1; Forward: scheme http, host openrouter-proxy, port 80" "    Domain: $1; Forward: scheme http, host openrouter-proxy, port 80" >&2
-  L "    Websockets: ON; SSL: выпусти сертификат + Force SSL" "    Websockets: ON; SSL: issue a certificate + Force SSL" >&2
+  L "==> Nginx Proxy Manager (Hosts → Proxy Hosts → Add) — по хосту на инстанс:" "==> Nginx Proxy Manager (Hosts → Proxy Hosts → Add) — one host per instance:" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    L "  $((i+1))) Domain: ${DOMAINS[$i]}; Forward: http, ${SVCS[$i]}, 80; Websockets: ON" \
+      "  $((i+1))) Domain: ${DOMAINS[$i]}; Forward: http, ${SVCS[$i]}, 80; Websockets: ON" >&2
+  done
 }
 
 print_traefik_steps() {
+  local i
   L "" >&2
-  L "==> Добавь в динамический конфиг Traefik (file provider):" "==> Add to your Traefik dynamic config (file provider):" >&2
-  cat >&2 <<EOF
-http:
-  routers:
-    openrouter-passthrough:
-      rule: "Host(\`$1\`)"
-      service: openrouter-passthrough
-  services:
-    openrouter-passthrough:
-      loadBalancer:
-        servers:
-          - url: "http://openrouter-proxy:80"
-EOF
+  L "==> Динамический конфиг Traefik (file provider):" "==> Traefik dynamic config (file provider):" >&2
+  echo "http:" >&2
+  echo "  routers:" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    printf '    p%d: { rule: "Host(`%s`)", service: p%d }\n' "$i" "${DOMAINS[$i]}" "$i" >&2
+  done
+  echo "  services:" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    printf '    p%d: { loadBalancer: { servers: [{ url: "http://%s:80" }] } }\n' "$i" "${SVCS[$i]}" >&2
+  done
   L "    (entrypoints/TLS — по твоей настройке Traefik)" "    (entrypoints/TLS — per your Traefik setup)" >&2
 }
 
 print_caddy_steps() {
+  local i
   L "" >&2
-  L "==> Добавь в Caddyfile:" "==> Add to your Caddyfile:" >&2
-  cat >&2 <<EOF
-$1 {
-    reverse_proxy openrouter-proxy:80
+  L "==> Caddyfile (Caddy сам получит сертификаты):" "==> Caddyfile (Caddy obtains certificates automatically):" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    cat >&2 <<EOF
+${DOMAINS[$i]} {
+    reverse_proxy ${SVCS[$i]}:80
 }
 EOF
-  L "    (Caddy сам получит сертификат)" "    (Caddy obtains the certificate automatically)" >&2
+  done
 }
 
-ask_proxy() {
-  local choice P net det PORT ip
+print_nginx_steps() {
+  local i port
+  L "" >&2
+  L "==> Голый nginx — по server-блоку на инстанс (TLS твой, например certbot):" "==> Plain nginx — one server block per instance (TLS is yours, e.g. certbot):" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    if [[ $i -eq 0 ]]; then port="${BIND_PORT_OUT:-${BIND_PORT:-8080}}"; else port=$((8080+i)); fi
+    cat >&2 <<EOF
+server {
+    listen 443 ssl;
+    server_name ${DOMAINS[$i]};
+    # ssl_certificate     /path/fullchain.pem;
+    # ssl_certificate_key /path/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;              # SSE streaming
+        proxy_read_timeout 600s;
+    }
+}
+EOF
+  done
+}
+
+print_remote_steps() {
+  local i port ip
+  ip=$(public_ip)
+  L "" >&2
+  L "==> Реверс-прокси на ДРУГОЙ машине → цели (префикс НЕ режь у себя):" "==> Reverse proxy on the OTHER machine → targets (do NOT strip the prefix there):" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    if [[ $i -eq 0 ]]; then port="${BIND_PORT_OUT:-8080}"; else port=$((8080+i)); fi
+    L "  ${DOMAINS[$i]} → http://$ip:$port" "  ${DOMAINS[$i]} → http://$ip:$port" >&2
+  done
+  L "    Пример блока (nginx там): proxy_pass http://$ip:<порт>; + proxy_buffering off" "    Example block (nginx there): proxy_pass http://$ip:<port>; + proxy_buffering off" >&2
+  L "    Порт(ы) открыты наружу — секретные префиксы остаются единственным замком." "    The port(s) are public — secret prefixes are the only gate." >&2
+}
+
+ask_proxy() { # optional $1 = pre-known proxy type (skip the menu, e.g. when
+              # reconstructing a v0.2.x install from .env)
+  local preset="${1:-}" choice P net det PORT
+  if [[ -n "$preset" ]]; then
+    P="$preset"
+  else
   L "" >&2
   L "Какой у тебя реверс-прокси и где?" "Which reverse proxy do you have, and where?" >&2
   L "  1) Pangolin — коннектор (newt/pangolin-cli) в docker на этой машине" "  1) Pangolin — connector (newt/pangolin-cli) in docker on this machine" >&2
@@ -413,6 +580,8 @@ ask_proxy() {
     [[ "$P" =~ ^[1-7]$ ]] && break
     L "Нужна цифра 1–7." "Enter a number 1–7." >&2
   done
+  fi
+  PROXY_TYPE="$P"
 
   case "$P" in
     1|2|3|4)
@@ -426,81 +595,38 @@ ask_proxy() {
       L "Ищу контейнер ($pattern)..." "Looking for the container ($pattern)..." >&2
       det=$(detect_network "$pattern") || det=""
       if [[ -n "$det" ]]; then
-        net="${det##*|}"
-        write_override "$net"
-        L "  найден: ${det%%|*}; сеть: $net → compose.override.yml записан" "  found: ${det%%|*}; network: $net → compose.override.yml written" >&2
+        NETWORK_NAME="${det##*|}"
+        L "  найден: ${det%%|*}; сеть: $NETWORK_NAME" "  found: ${det%%|*}; network: $NETWORK_NAME" >&2
       else
-        L "  не нашёл автоматически. Контейнер будет доступен только на 127.0.0.1." "  could not detect it automatically. The container will only listen on 127.0.0.1." >&2
-        L "  Вручную: docker ps → docker inspect <контейнер> (смотри Networks)," "  Manually: docker ps → docker inspect <container> (see Networks)," >&2
-        L "  затем скопируй examples/<твой-прокси>/compose.override.yml рядом с compose.yml," "  then copy examples/<your-proxy>/compose.override.yml next to compose.yml," >&2
-        L "  впиши имя сети и запусти: docker compose up -d" "  put the network name in, and run: docker compose up -d" >&2
+        DETECT_FAILED=1
+        L "  не нашёл автоматически — настрой сеть вручную по examples/ и перезапусти установщик (Enter = keep)." \
+          "  could not detect it — configure the network manually per examples/ and rerun the installer (Enter = keep)." >&2
       fi
-      case "$P" in
-        1) print_pangolin_steps "${FQDN_OUT:-your.domain}" "${PREFIX_OUT:-YOUR_PREFIX}" ;;
-        2) print_npm_steps "${FQDN_OUT:-your.domain}" ;;
-        3) print_traefik_steps "${FQDN_OUT:-your.domain}" ;;
-        4) print_caddy_steps "${FQDN_OUT:-your.domain}" ;;
-      esac
       ;;
-    5)
-      L "" >&2
-      L "==> Голый nginx: вставь в свою конфигурацию (TLS — твой, например certbot):" "==> Plain nginx: add this to your config (TLS is yours, e.g. certbot):" >&2
-      cat >&2 <<EOF
-server {
-    listen 443 ssl;
-    server_name ${FQDN_OUT:-your.domain};
-    # ssl_certificate     /path/fullchain.pem;
-    # ssl_certificate_key /path/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:${BIND_PORT:-8080};
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;              # SSE streaming
-        proxy_read_timeout 600s;
-    }
-}
-EOF
-      ;;
+    5) : ;;
     6)
-      PORT=$(ask "Порт, который слушает этот сервер (Enter = 8080):" "Port this server should listen on (Enter = 8080):" "8080")
-      BIND_IP_OUT="0.0.0.0"; BIND_PORT_OUT="$PORT"
-      ip=$(public_ip)
-      L "" >&2
-      L "==> Настрой реверс-прокси на ДРУГОЙ машине на http://$ip:$PORT" "==> Point the reverse proxy on the OTHER machine at http://$ip:$PORT" >&2
-      L "    Префикс НЕ вырезай у себя — его обрабатывает контейнер. Пример (nginx там):" "    Do NOT strip the prefix there — the container handles it. Example (nginx there):" >&2
-      cat >&2 <<EOF
-location / {
-    proxy_pass http://$ip:$PORT;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-    proxy_read_timeout 600s;
-}
-EOF
-      L "    Порт открыт наружу — секретный префикс остаётся единственным замком." "    The port is public — the secret prefix is now the only gate." >&2
+      if [[ -n "$preset" && -n "${BIND_PORT:-}" ]]; then
+        BIND_IP_OUT="${BIND_IP:-0.0.0.0}"; BIND_PORT_OUT="${BIND_PORT}"   # already sourced from .env
+      else
+        PORT=$(ask "Порт, который слушает этот сервер (Enter = 8080):" "Port this server should listen on (Enter = 8080):" "8080")
+        BIND_IP_OUT="0.0.0.0"; BIND_PORT_OUT="$PORT"
+      fi
       ;;
-    7)
-      L "" >&2
-      L "==> Реверс-прокси не настроен — это за рамками проекта." "==> No reverse proxy — that is outside this project's scope." >&2
-      L "    Самый простой вариант — Caddy (сертификаты сам): https://caddyserver.com/" "    Simplest option — Caddy (automatic certificates): https://caddyserver.com/" >&2
-      L "    Поставишь — запусти установщик снова, он доделает связку." "    Once it is up, run this installer again and it will wire things up." >&2
-      NO_PROXY=1
-      ;;
+    7) NO_PROXY=1 ;;
   esac
 }
 
 # ---------- env file ---------------------------------------------------------
 write_env() {
   {
-    echo "# Generated by install.sh"
+    echo "# Generated by install.sh (first instance; the rest — see instances.conf)"
     echo "SECRET_PREFIX=${PREFIX_OUT}"
     echo "UPSTREAM_URL=${UPSTREAM_URL_OUT}"
     echo "UPSTREAM_HOST=${UPSTREAM_HOST_OUT}"
     echo "DOMAIN=${FQDN_OUT}"
     echo "PROXY_TYPE=${PROXY_OUT}"
-    [[ -n "${BIND_IP_OUT:-}" ]]    && echo "BIND_IP=${BIND_IP_OUT}"
-    [[ -n "${BIND_PORT_OUT:-}" ]]  && echo "BIND_PORT=${BIND_PORT_OUT}"
+    [[ -n "${BIND_IP_OUT:-}" ]]   && echo "BIND_IP=${BIND_IP_OUT}"
+    [[ -n "${BIND_PORT_OUT:-}" ]] && echo "BIND_PORT=${BIND_PORT_OUT}"
   } > "$INSTALL_DIR/.env"
   chmod 600 "$INSTALL_DIR/.env"
 }
@@ -517,56 +643,117 @@ main() {
   preflight
   fetch_files
 
-  # existing .env?
-  PREFIX_OUT=""; UPSTREAM_URL_OUT=""; UPSTREAM_HOST_OUT=""; FQDN_OUT=""; PROXY_OUT=""
-  if [[ -f "$INSTALL_DIR/.env" ]]; then
-    local ans
-    ans=$(ask "Найден существующий .env — использовать его? (Enter = да, r = перенастроить):" \
-               "Existing .env found — use it? (Enter = yes, r = reconfigure):" "")
-    if [[ "$ans" != "r" && "$ans" != "R" ]]; then
-      PREFIX_OUT=$(env_get SECRET_PREFIX)
-      UPSTREAM_URL_OUT=$(env_get UPSTREAM_URL); UPSTREAM_URL_OUT=${UPSTREAM_URL_OUT:-https://openrouter.ai}
-      UPSTREAM_HOST_OUT=$(env_get UPSTREAM_HOST); UPSTREAM_HOST_OUT=${UPSTREAM_HOST_OUT:-openrouter.ai}
-      FQDN_OUT=$(env_get DOMAIN)
-      if [[ -z "$FQDN_OUT" ]]; then choose_domain; fi
-    else
-      choose_upstream; choose_prefix; choose_domain
+  # --- fresh or keep? ------------------------------------------------------
+  local fresh=1 ans keep_answer
+  if [[ -f "$INSTALL_DIR/instances.conf" && -f "$INSTALL_DIR/.env" ]]; then
+    keep_answer=$(ask "Найдена существующая установка — использовать её? (Enter = да, r = перенастроить всё):" \
+                      "Existing installation found — use it? (Enter = yes, r = reconfigure):" "")
+    if [[ "$keep_answer" != "r" && "$keep_answer" != "R" ]]; then
+      load_instances
+      # make .env values visible for regenerating overrides (BIND_IP etc.)
+      set -a; source "$INSTALL_DIR/.env"; set +a
+      fresh=0
     fi
-  else
-    probe_table
-    choose_upstream
-    choose_prefix
-    choose_domain
+  elif [[ -f "$INSTALL_DIR/.env" ]]; then
+    # v0.2-style install: reconstruct a single instance from .env, then
+    # re-detect the reverse-proxy network so the override survives the rewrite
+    PREFIX_OUT=$(env_get SECRET_PREFIX)
+    UPSTREAM_URL_OUT=$(env_get UPSTREAM_URL); UPSTREAM_URL_OUT=${UPSTREAM_URL_OUT:-https://openrouter.ai}
+    UPSTREAM_HOST_OUT=$(env_get UPSTREAM_HOST); UPSTREAM_HOST_OUT=${UPSTREAM_HOST_OUT:-openrouter.ai}
+    FQDN_OUT=$(env_get DOMAIN)
+    SVCS=("openrouter-proxy"); URLS=("$UPSTREAM_URL_OUT"); HOSTS=("$UPSTREAM_HOST_OUT")
+    PREFIXES=("$PREFIX_OUT"); DOMAINS=("$FQDN_OUT")
+    PROXY_TYPE=$(env_get PROXY_TYPE)
+    keep_answer=$(ask "Найден старый .env — оставить как есть? (Enter = да, r = перенастроить):" \
+                      "Old-style .env found — keep as is? (Enter = yes, r = reconfigure):" "")
+    if [[ "$keep_answer" == "r" || "$keep_answer" == "R" ]]; then
+      SVCS=(); URLS=(); HOSTS=(); PREFIXES=(); DOMAINS=(); fresh=1
+    else
+      fresh=0
+      set -a; source "$INSTALL_DIR/.env"; set +a   # BIND_IP/BIND_PORT etc.
+      if [[ -n "$PROXY_TYPE" && "$PROXY_TYPE" != 5 ]]; then
+        ask_proxy "$PROXY_TYPE"
+      fi
+    fi
   fi
 
-  ask_proxy
+  # --- collect instances ---------------------------------------------------
+  if [[ $fresh -eq 1 ]]; then
+    probe_table
+    while :; do
+      choose_upstream
+      choose_prefix
+      choose_domain
+      add_instance
+      ans=$(ask "Добавить ещё один прокси на этом сервере? [y/N]:" "Add another proxy on this server? [y/N]:" "N")
+      [[ "$ans" == "y" || "$ans" == "Y" ]] || break
+    done
+    ask_proxy
+  fi
+
+  # --- persist -------------------------------------------------------------
+  PREFIX_OUT="${PREFIXES[0]:-}"; UPSTREAM_URL_OUT="${URLS[0]:-}"; UPSTREAM_HOST_OUT="${HOSTS[0]:-}"
+  FQDN_OUT="${DOMAINS[0]:-}"; PROXY_OUT="${PROXY_TYPE}"
+  write_env
+  save_instances
 
   if [[ "${NO_PROXY:-0}" == "1" ]]; then
-    PROXY_OUT="none"
-    write_env
-    (cd "$INSTALL_DIR" && docker compose up -d)
+    gen_override ""   # single instance → file removed; multi → extra services on loopback
+    say "Поднимаю контейнер(ы) — только loopback, прокси не настроен..." \
+        "Bringing containers up — loopback only, no reverse proxy yet..."
+    (cd "$INSTALL_DIR" && docker compose up -d) || die "docker compose up не удался" "docker compose up failed"
+    L "" >&2
+    L "Реверс-прокси не настроен — это за рамками проекта." "No reverse proxy — that is outside this project's scope." >&2
+    L "Самый простой вариант — Caddy (сертификаты сам): https://caddyserver.com/" "Simplest option — Caddy: https://caddyserver.com/" >&2
+    L "Поставишь — запусти установщик снова (Enter = keep), он доделает связку." "Once it is up, rerun this installer (Enter = keep)." >&2
     exit 0
   fi
 
-  write_env
-  say "Поднимаю контейнер..." "Bringing the container up..."
+  if [[ "$DETECT_FAILED" == "1" && "$fresh" == "0" ]]; then
+    say "Сеть реверс-прокси не определилась — оставляю прежний compose.override.yml без изменений." \
+        "Could not re-detect the network — keeping the existing compose.override.yml untouched."
+  elif [[ "$DETECT_FAILED" == "1" ]]; then
+    rm -f "$INSTALL_DIR/compose.override.yml"
+  else
+    gen_override "$NETWORK_NAME"
+  fi
+
+  # the network must exist; if it vanished (proxy stack recreated), fail loudly
+  if [[ -n "$NETWORK_NAME" ]] && ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+    die "сеть docker '$NETWORK_NAME' не существует — перезапусти установщик и ответь r" \
+        "docker network '$NETWORK_NAME' does not exist — rerun the installer and answer r"
+  fi
+  say "Поднимаю контейнер(ы)..." "Bringing container(s) up..."
   (cd "$INSTALL_DIR" && docker compose up -d) || die "docker compose up не удался — смотри вывод выше" "docker compose up failed — see the output above"
 
-  # summary
-  local port="${BIND_PORT_OUT:-${BIND_PORT:-8080}}"
-  sleep 2
-  local code
-  code=$(probe "http://127.0.0.1:${port}/${PREFIX_OUT}/api/v1/models" 10)
+  # --- summary -------------------------------------------------------------
+  local i port code bip="${BIND_IP_OUT:-${BIND_IP:-127.0.0.1}}"
   L "" >&2
   L "================= ГОТОВО =================" "================= DONE =================" >&2
-  L "Сервис:          openrouter-proxy" "Service:          openrouter-proxy" >&2
-  L "Префикс:          $PREFIX_OUT" "Prefix:           $PREFIX_OUT" >&2
-  L "Апстрим:          $UPSTREAM_URL_OUT" "Upstream:         $UPSTREAM_URL_OUT" >&2
-  L "Домен:            $FQDN_OUT" "Domain:           $FQDN_OUT" >&2
-  L "Base URL (в приложениях): https://$FQDN_OUT/$PREFIX_OUT" "Base URL (for apps): https://$FQDN_OUT/$PREFIX_OUT" >&2
-  L "Локальный тест:   HTTP $code (http://127.0.0.1:$port/$PREFIX_OUT/api/v1/models)" "Local test:       HTTP $code (http://127.0.0.1:$port/$PREFIX_OUT/api/v1/models)" >&2
-  L "  (любой HTTP-код от апстрима = связка работает)" "  (any HTTP code from the upstream edge means the chain works)" >&2
-  L "Полная документация: $INSTALL_DIR/README.md" "Full docs: $INSTALL_DIR/README.md" >&2
+  case "$PROXY_TYPE" in
+    1) print_pangolin_steps ;;
+    2) print_npm_steps ;;
+    3) print_traefik_steps ;;
+    4) print_caddy_steps ;;
+    5) print_nginx_steps ;;
+    6) print_remote_steps ;;
+  esac
+  L "" >&2
+  L "Инстансы:" "Instances:" >&2
+  for ((i=0; i<${#SVCS[@]}; i++)); do
+    if [[ $i -eq 0 ]]; then port="${BIND_PORT_OUT:-${BIND_PORT:-8080}}"; else port=$((8080+i)); fi
+    h=$(probe "http://127.0.0.1:${port}/" 10)
+    code=$(probe_auth "http://127.0.0.1:${port}/${PREFIXES[$i]}/api/v1/models" 10)
+    L "  $((i+1))) ${DOMAINS[$i]}" "  $((i+1))) ${DOMAINS[$i]}" >&2
+    L "     Base URL: https://${DOMAINS[$i]}/${PREFIXES[$i]}" "     Base URL: https://${DOMAINS[$i]}/${PREFIXES[$i]}" >&2
+    L "     Апстрим:  ${URLS[$i]}   Таргет: ${SVCS[$i]}:80" "     Upstream: ${URLS[$i]}   Target: ${SVCS[$i]}:80" >&2
+    L "     Локально: nginx $h, апстрим HTTP $code (порт $port)" "     Local:    nginx $h, upstream HTTP $code (port $port)" >&2
+  done
+  L "" >&2
+  L "  nginx 200 — контейнер жив; любой HTTP от апстрима — связка работает" "  nginx 200 — container is alive; any HTTP from the upstream — the chain works" >&2
+  L "  (200/401 — норма; у OpenAI GET models бывает 404 от фильтра, POST-ы проходят)." "  (200/401 are normal; OpenAI may 404 GET models — POSTs pass fine)." >&2
+  L "" >&2
+  L "Состояние: instances.conf · Документация: $INSTALL_DIR/README.md" "State: instances.conf · Docs: $INSTALL_DIR/README.md" >&2
 }
 
 # run when executed directly or piped (BASH_SOURCE empty); skip when sourced
