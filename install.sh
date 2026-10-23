@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openrouter-passthrough — interactive installer (v0.2.0)
+# openrouter-passthrough — interactive installer (v0.2.1)
 #
 # One-liner:
 #   curl -fsSL https://raw.githubusercontent.com/ptath/openrouter-passthrough/main/install.sh | bash
@@ -286,13 +286,17 @@ choose_domain() {
   L "" >&2
   while :; do
     BASE=$(ask "Твой базовый домен (например, mydomain.tld):" "Your base domain (e.g. mydomain.tld):" "")
-    BASE="${BASE,, }"; BASE="${BASE// /}"
+    BASE="$(printf '%s' "$BASE" | tr '[:upper:]' '[:lower:]')"
+    BASE="${BASE// /}"
     if [[ "$BASE" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]]; then break; fi
     L "Не похоже на домен. Пример: mydomain.tld" "Does not look like a domain. Example: mydomain.tld" >&2
   done
   LABEL=$(gen_label)
-  FQDN=$(ask "Поддомен (Enter = сгенерированный):" "Subdomain (Enter = generated):" "${LABEL}.${BASE}")
-  FQDN="${FQDN,, }"; FQDN="${FQDN// /}"
+  FQDN=$(ask "Поддомен — метка или полное имя (Enter = сгенерированный):" "Subdomain — label or full name (Enter = generated):" "${LABEL}.${BASE}")
+  FQDN="$(printf '%s' "$FQDN" | tr '[:upper:]' '[:lower:]')"
+  FQDN="${FQDN// /}"
+  # a dotless answer is treated as a label — append the base domain
+  [[ "$FQDN" != *.* && -n "$BASE" ]] && FQDN="${FQDN}.${BASE}"
   FQDN_OUT="$FQDN"
 
   rip=$(resolve_ip "$FQDN"); sip=$(public_ip)
@@ -561,7 +565,7 @@ main() {
   L "Домен:            $FQDN_OUT" "Domain:           $FQDN_OUT" >&2
   L "Base URL (в приложениях): https://$FQDN_OUT/$PREFIX_OUT" "Base URL (for apps): https://$FQDN_OUT/$PREFIX_OUT" >&2
   L "Локальный тест:   HTTP $code (http://127.0.0.1:$port/$PREFIX_OUT/api/v1/models)" "Local test:       HTTP $code (http://127.0.0.1:$port/$PREFIX_OUT/api/v1/models)" >&2
-  L "  (HTTP от апстрима = связка работает; без ключа Some APIs отвечают 401/403)" "  (any HTTP code from the upstream edge means the chain works)" >&2
+  L "  (любой HTTP-код от апстрима = связка работает)" "  (any HTTP code from the upstream edge means the chain works)" >&2
   L "Полная документация: $INSTALL_DIR/README.md" "Full docs: $INSTALL_DIR/README.md" >&2
 }
 
