@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# llm-passthrough — interactive installer (v0.4.0, multi-provider)
+# llm-passthrough — interactive installer (v0.4.1, multi-provider)
 #
 # One-liner:
 #   curl -fsSL https://raw.githubusercontent.com/ptath/llm-passthrough/main/install.sh | bash
@@ -742,7 +742,15 @@ main() {
   L "Инстансы:" "Instances:" >&2
   for ((i=0; i<${#SVCS[@]}; i++)); do
     if [[ $i -eq 0 ]]; then port="${BIND_PORT_OUT:-${BIND_PORT:-8080}}"; else port=$((8080+i)); fi
-    h=$(probe "http://127.0.0.1:${port}/" 10)
+    # nginx spends a moment in its entrypoint (envsubst + config test) after
+    # the container starts; a connection-refused here is a race, not a failure.
+    # Wait for it to bind before probing — up to ~8 s.
+    h="000"
+    for _ in 1 2 3 4 5 6 7 8; do
+      h=$(probe "http://127.0.0.1:${port}/" 3)
+      [[ "$h" != "000" ]] && break
+      sleep 1
+    done
     code=$(probe_auth "http://127.0.0.1:${port}/${PREFIXES[$i]}/api/v1/models" 10)
     L "  $((i+1))) ${DOMAINS[$i]}" "  $((i+1))) ${DOMAINS[$i]}" >&2
     L "     Base URL: https://${DOMAINS[$i]}/${PREFIXES[$i]}" "     Base URL: https://${DOMAINS[$i]}/${PREFIXES[$i]}" >&2

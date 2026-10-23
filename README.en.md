@@ -2,7 +2,7 @@
 
 A tiny passthrough reverse proxy for [OpenRouter](https://openrouter.ai) (and any other LLM API) in regions where it is blocked. Official `nginx:alpine` image, no builds, ~10 MB RAM. Sits behind your existing reverse proxy — Pangolin, Caddy, Nginx Proxy Manager, Traefik or plain nginx.
 
-**v0.4.0** · beta · [MIT](LICENSE)
+**v0.4.1** · beta · [MIT](LICENSE)
 
 > ⚠️ Bypassing regional restrictions may violate the upstream ToS — account risk is on you. Keep your proxy domain private, keep your API key local.
 
